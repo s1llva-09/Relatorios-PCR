@@ -20,11 +20,11 @@
     @param cFilAte,  Caracter, Filial final   (vazio = filial logada)
     @param cDe,      Caracter, Emissao inicial AAAAMMDD (vazio = 1o dia do mes)
     @param cAte,     Caracter, Emissao final   AAAAMMDD (vazio = ultimo dia do mes)
-    @param cTipoDe,  Caracter, Tipo inicial: PA, PE ou PI (vazio = PA)
-    @param cTipoAte, Caracter, Tipo final:   PA, PE ou PI (vazio = PI)
+    @param cTipoDe,  Caracter, Tipo inicial do PAI: PA ou PE (vazio = PA)
+    @param cTipoAte, Caracter, Tipo final do PAI:   PA ou PE (vazio = PE)
     @return character Caminho do arquivo XLSX gerado ("" se nao houver dados)
 
-    @example  cArq := U_RelatorioPCE("0201", "0301", "20260701", "20260731", "PA", "PI")
+    @example  cArq := U_RelatorioPCE("0201", "0301", "20260701", "20260731", "PA", "PE")
     @see SD3, SG1, SB1, ZPX
 /*/
 User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as character, cAte as character, cTipoDe as character, cTipoAte as character) as character
@@ -63,12 +63,12 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
         cAte := DToS(UltDia(dDataBase))
     EndIf
 
-    // Tipos: em branco abre o intervalo todo (PA ate PI).
+    // Tipos: em branco abre o intervalo todo (PA ate PE).
     If Empty(cTipoDe)
         cTipoDe := "PA"
     EndIf
     If Empty(cTipoAte)
-        cTipoAte := "PI"
+        cTipoAte := "PE"
     EndIf
 
     // A ZPX (celula de costura) so existe como ZPX020 -- empresa 02.
@@ -153,7 +153,7 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "      AND D3_ESTORNO <> 'S' "
     cQuery += "      AND D3_CF = 'PR0' "
     // Tipos: o usuario escolhe um intervalo (De/Ate), mas o SQL sai como
-    // IN com a lista exata. Um BETWEEN 'PA' AND 'PI' arrastaria PB, PC,
+    // IN com a lista exata. Um BETWEEN 'PA' AND 'PE' arrastaria PB, PC,
     // PD... -- tipos que existem no Protheus e nao interessam aqui.
     cIn := MontaTipos(cTipoDe, cTipoAte)
     If !Empty(cIn)
@@ -176,8 +176,10 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += " ), "
 
     // --- CTE 2: estrutura dos componentes ------------------------------
-    // So componentes tipo PI, e o JOIN com SB1 tambem descarta os que
-    // estao bloqueados para PI (B1_ZZBLQPI = 'S' -- campo customizado).
+    // Componentes tipo PI ou PE. Nao confundir com o filtro de tipo do
+    // PAI (parametro da tela, PA/PE): aqui e o COMPONENTE da estrutura.
+    // O JOIN com SB1 tambem descarta os bloqueados para PI
+    // (B1_ZZBLQPI = 'S' -- campo customizado da empresa).
     cQuery += " Estrutura AS ( "
     cQuery += "   SELECT G1_COD, G1_COMP, G1_QUANT "
     cQuery += "     FROM " + RetSqlName("SG1") + " G1 (NOLOCK) "
@@ -186,7 +188,7 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "      AND B1.D_E_L_E_T_ = ' ' "
     cQuery += "      AND B1_ZZBLQPI <> 'S' "
     cQuery += "    WHERE G1.D_E_L_E_T_ = ' ' "
-    cQuery += "      AND B1_TIPO = 'PI' "
+    cQuery += "      AND B1_TIPO IN ('PI','PE') "
     cQuery += " ), "
 
     // --- CTE 3: consumo real -------------------------------------------
@@ -286,8 +288,8 @@ Return cRet
 
 
 /*/{Protheus.doc} MontaTipos
-    Recebe o intervalo escolhido (ex: "PA" ate "PI") e devolve a lista
-    formatada para o IN -- ex: "'PA','PE','PI'".
+    Recebe o intervalo escolhido (ex: "PA" ate "PE") e devolve a lista
+    formatada para o IN -- ex: "'PA','PE'".
 
     Trabalha sobre uma lista fechada dos tipos validos em vez de usar
     BETWEEN no SQL. Motivo: o Protheus tem outros tipos (PB, PC, PD...)
@@ -299,7 +301,10 @@ Return cRet
 /*/
 Static Function MontaTipos(cDe as character, cAte as character) as character
 
-    Local aTipos := {"PA", "PE", "PI"} as array
+    // Tipos do produto PAI. O PI saiu da lista: no SQL de origem a
+    // producao lida e so PE/PA. O PI segue existindo do outro lado, como
+    // COMPONENTE, na CTE Estrutura -- sao coisas diferentes.
+    Local aTipos := {"PA", "PE"} as array
     Local cLista := "" as character
     Local nI     := 0 as numeric
 
@@ -390,17 +395,66 @@ Static Function DataBr(cData as character) as character
 Return cRet
 
 
+
+
+/*/{Protheus.doc} Baixar
+    Copia o arquivo do servidor para a maquina de quem rodou o relatorio.
+
+    POR QUE ISSO E NECESSARIO
+    -------------------------
+    O AppServer roda no servidor, entao o FWMsExcelXlsx grava LA. Antes o
+    arquivo ficava em \cachenosso\ e o usuario tinha que ir buscar por
+    rede -- o que so funcionava para quem tinha acesso aquela pasta.
+
+    CpyS2T = "Copy Server To Terminal": leva o arquivo do servidor para o
+    cliente. E o par do CpyT2S, que faz o contrario.
+
+    O cGetFile abre a janela "Salvar como" no computador do usuario. Com
+    o 5o parametro .T. ele opera em modo gravacao (sugere nome, avisa se
+    ja existe) em vez de modo abertura.
+
+    @param cServidor, Caracter, arquivo gerado no servidor
+    @return logical, .T. se o arquivo chegou na maquina do usuario
+/*/
+Static Function Baixar(cServidor as character) as logical
+
+    Local cDestino := "" as character
+    Local cSugere  := "PCE_" + DToS(dDataBase) + ".xlsx" as character
+    Local lOk      := .F. as logical
+
+    cDestino := cGetFile("Planilha Excel (*.xlsx) |*.xlsx", ;
+                         "Salvar relatorio como", , cSugere, .T., , .T.)
+
+    // Usuario fechou a janela sem escolher: nao e erro, so desistencia.
+    If Empty(cDestino)
+        Return .F.
+    EndIf
+
+    // A janela nem sempre devolve a extensao, e sem ela o Excel nao
+    // reconhece o arquivo ao dar duplo clique.
+    If !(".XLSX" $ Upper(cDestino))
+        cDestino += ".xlsx"
+    EndIf
+
+    lOk := CpyS2T(cServidor, cDestino)
+
+Return lOk
 /*/{Protheus.doc} MontaNome
-    Caminho do arquivo de saida.
+    Caminho do arquivo de saida, NO SERVIDOR.
+
+    O relatorio nasce sempre no servidor -- e la que o AppServer roda.
+    Depois o PCEMenu copia para a maquina de quem pediu (ver Baixar()).
+    Por isso aqui usamos a pasta temporaria, e nao mais a \cachenosso\:
+    o arquivo do servidor virou passagem, nao destino, e deixa-lo numa
+    pasta permanente so acumularia lixo a cada execucao.
+
     CriaTrab(Nil, .F.) devolve um nome UNICO sem criar tabela nenhuma
     (Nil na estrutura + .F. e o que evita a criacao), garantindo que duas
     execucoes simultaneas nao gravem por cima uma da outra.
-    O diretorio escolhemos na mao: no StartPath o arquivo se perde no
-    meio dos arquivos do Protheus.
 /*/
 Static Function MontaNome() as character
 
-    Local cDir := "\cachenosso\" as character
+    Local cDir := GetTempPath() as character
 
     If !ExistDir(cDir)
         MakeDir(cDir)
@@ -482,7 +536,7 @@ User Function PCEMenu()
     Local cArq   := "" as character
     Local cDe    := "" as character
     Local cAte   := "" as character
-    Local aTipos := {"PA", "PE", "PI"} as array
+    Local aTipos := {"PA", "PE"} as array
 
     // Barra aqui tambem, antes de pedir os parametros: sem isso o usuario
     // preencheria a tela toda para so no fim receber "nenhum registro",
@@ -505,10 +559,12 @@ User Function PCEMenu()
     AAdd(aPergs, {1, "Emissao ate", UltDia(dDataBase),  "", "", "", "", 50, .F.})
 
     // Tipo: combo (tipo 2) em vez de texto livre, para so aparecerem os
-    // tres tipos que o relatorio trata. O 3o elemento e a opcao inicial:
-    // 1 = PA no De, 3 = PI no Ate, abrindo o intervalo todo por padrao.
+    // tipos que o relatorio trata. O 3o elemento e a opcao inicial:
+    // 1 = PA no De, 2 = PE no Ate, abrindo o intervalo todo por padrao.
+    // Manter esses indices alinhados com aTipos -- apontar para uma
+    // posicao que nao existe mais deixa o combo em branco.
     AAdd(aPergs, {2, "Tipo de",  1, aTipos, 60, "", .F.})
-    AAdd(aPergs, {2, "Tipo ate", 3, aTipos, 60, "", .F.})
+    AAdd(aPergs, {2, "Tipo ate", 2, aTipos, 60, "", .F.})
 
 
     // Os 3 ultimos argumentos (cLoad, lCanSave, lUserSave) desligam o
@@ -536,9 +592,20 @@ User Function PCEMenu()
 
     If Empty(cArq)
         MsgAlert("Nenhum registro encontrado para os filtros informados.", "Relatorio")
-    Else
-        MsgInfo("Arquivo gerado em:" + CRLF + cArq, "Relatorio")
+        Return
     EndIf
+
+    // O arquivo existe no SERVIDOR. Baixar() pergunta onde salvar e traz
+    // para a maquina do usuario. Se ele desistir da janela "Salvar como",
+    // nao ha nada a avisar -- foi escolha dele.
+    If Baixar(cArq)
+        MsgInfo("Relatorio salvo no seu computador.", "Relatorio")
+    EndIf
+
+    // Apaga a copia do servidor: ela era so a passagem ate o usuario.
+    // Fica fora do If de proposito -- mesmo que ele cancele o download,
+    // o temporario nao tem por que continuar la.
+    FErase(cArq)
 
 Return
 
@@ -565,8 +632,8 @@ User Function ZTSTPCE()
     RpcSetEnv("02", "0201")
 
     // Em branco nos seis: cai nos defaults (filial logada, mes corrente,
-    // tipos PA ate PI). Trocar aqui para testar outros filtros -- ex:
-    // U_RelatorioPCE("0201", "0301", "20260701", "20260731", "PA", "PI")
+    // tipos PA ate PE). Trocar aqui para testar outros filtros -- ex:
+    // U_RelatorioPCE("0201", "0301", "20260701", "20260731", "PA", "PE")
     cArq := U_RelatorioPCE("", "", "", "", "", "")
 
     If Empty(cArq)
