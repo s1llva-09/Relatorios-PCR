@@ -3,7 +3,7 @@
 #include "tlpp-core.th"
 
 /*/{Protheus.doc} RelatorioPCE
-    Producao com Consumo errado.
+    Conferencia Consumo vs Estrutura.
 
     Compara, por OP/sequencia de producao, o consumo ESPERADO (qtd
     produzida do pai x qtd do componente na estrutura SG1) contra o
@@ -489,7 +489,7 @@ Static Function GeraExcel(cArquivo as character, aDados as array) as logical
 
     Local oExcel  := Nil
     Local cAba    := "Consumo" as character
-    Local cTabela := "Producao com Consumo Errado" as character
+    Local cTabela := "Conferencia Consumo vs Estrutura" as character
     Local aCols   := {} as array
     Local nI      := 0 as numeric
 
@@ -588,7 +588,7 @@ User Function PCEMenu()
     // restaura POR POSICAO -- como a estrutura da tela mudou (o campo 2
     // era data e virou filial), ele devolvia a data velha no campo de
     // filial. Sem salvar, a tela sempre abre nos defaults.
-    If !ParamBox(aPergs, "Producao com Consumo Errado", @aRet, , , , , , , "PCEPARAM", .F., .F.)
+    If !ParamBox(aPergs, "Conferencia Consumo vs Estrutura", @aRet, , , , , , , "PCEPARAM", .F., .F.)
         Return   // usuario cancelou
     EndIf
 
