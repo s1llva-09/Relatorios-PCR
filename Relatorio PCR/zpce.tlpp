@@ -395,8 +395,6 @@ Static Function DataBr(cData as character) as character
 Return cRet
 
 
-
-
 /*/{Protheus.doc} Baixar
     Copia o arquivo do servidor para a maquina de quem rodou o relatorio.
 
@@ -409,58 +407,75 @@ Return cRet
     CpyS2T = "Copy Server To Terminal": leva o arquivo do servidor para o
     cliente. E o par do CpyT2S, que faz o contrario.
 
-    O cGetFile abre a janela "Salvar como" no computador do usuario. Com
-    o 5o parametro .T. ele opera em modo gravacao (sugere nome, avisa se
-    ja existe) em vez de modo abertura.
+    DUAS REGRAS DO CpyS2T QUE PEGAM
+    -------------------------------
+    1. A ORIGEM e relativa ao rootpath e nao aceita letra de drive
+       ("\cachenosso\arq.xlsx", nunca "C:\...\arq.xlsx").
+    2. O DESTINO e a PASTA, nao o arquivo. O nome vem da origem -- e por
+       isso que o MontaNome ja batiza o arquivo de "PCE_...".
+
+    Por causa da regra 2, o que o usuario digitar como nome na janela e
+    ignorado; so a pasta escolhida vale. A mensagem final mostra o
+    caminho real onde o arquivo caiu, para nao gerar duvida.
 
     @param cServidor, Caracter, arquivo gerado no servidor
-    @return logical, .T. se o arquivo chegou na maquina do usuario
+    @return character, pasta onde o arquivo foi salvo ("" se nao salvou)
 /*/
-Static Function Baixar(cServidor as character) as logical
+Static Function Baixar(cServidor as character) as character
 
-    Local cDestino := "" as character
-    Local cSugere  := "PCE_" + DToS(dDataBase) + ".xlsx" as character
-    Local lOk      := .F. as logical
+    Local cEscolha := "" as character
+    Local cDirCli  := "" as character
+    Local nBarra   := 0 as numeric
 
-    cDestino := cGetFile("Planilha Excel (*.xlsx) |*.xlsx", ;
-                         "Salvar relatorio como", , cSugere, .T., , .T.)
+    cEscolha := cGetFile("Planilha Excel (*.xlsx) |*.xlsx", ;
+                         "Escolha a pasta de destino", , , .T., , .T.)
 
     // Usuario fechou a janela sem escolher: nao e erro, so desistencia.
-    If Empty(cDestino)
-        Return .F.
+    If Empty(cEscolha)
+        Return ""
     EndIf
 
-    // A janela nem sempre devolve a extensao, e sem ela o Excel nao
-    // reconhece o arquivo ao dar duplo clique.
-    If !(".XLSX" $ Upper(cDestino))
-        cDestino += ".xlsx"
+    // Corta tudo depois da ultima barra, ficando so com a pasta.
+    nBarra := RAt("\", cEscolha)
+
+    If nBarra == 0
+        Return ""
     EndIf
 
-    lOk := CpyS2T(cServidor, cDestino)
+    cDirCli := SubStr(cEscolha, 1, nBarra)
 
-Return lOk
+    If !CpyS2T(cServidor, cDirCli)
+        Return ""
+    EndIf
+
+Return cDirCli
+
+
 /*/{Protheus.doc} MontaNome
     Caminho do arquivo de saida, NO SERVIDOR.
 
     O relatorio nasce sempre no servidor -- e la que o AppServer roda.
     Depois o PCEMenu copia para a maquina de quem pediu (ver Baixar()).
-    Por isso aqui usamos a pasta temporaria, e nao mais a \cachenosso\:
-    o arquivo do servidor virou passagem, nao destino, e deixa-lo numa
-    pasta permanente so acumularia lixo a cada execucao.
+
+    O caminho e RELATIVO ao rootpath, comecando em "\". Nao pode ser
+    GetTempPath() nem nada com letra de drive: o CpyS2T recusa a origem
+    com "must not contain the destination drive letter".
 
     CriaTrab(Nil, .F.) devolve um nome UNICO sem criar tabela nenhuma
     (Nil na estrutura + .F. e o que evita a criacao), garantindo que duas
-    execucoes simultaneas nao gravem por cima uma da outra.
+    execucoes simultaneas nao gravem por cima uma da outra. O prefixo
+    "PCE_" e so para o usuario reconhecer o arquivo no Downloads: e esse
+    mesmo nome que chega na maquina dele, porque o CpyS2T mantem o nome
+    da origem.
 /*/
 Static Function MontaNome() as character
 
-    Local cDir := GetTempPath() as character
-
+    Local cDir := "\cachenosso\" as character
     If !ExistDir(cDir)
         MakeDir(cDir)
     EndIf
 
-Return cDir + CriaTrab(Nil, .F.) + ".xlsx"
+Return cDir + "PCE_" + CriaTrab(Nil, .F.) + ".xlsx"
 
 
 /*/{Protheus.doc} GeraExcel
@@ -536,6 +551,7 @@ User Function PCEMenu()
     Local cArq   := "" as character
     Local cDe    := "" as character
     Local cAte   := "" as character
+    Local cPasta := "" as character
     Local aTipos := {"PA", "PE"} as array
 
     // Barra aqui tambem, antes de pedir os parametros: sem isso o usuario
@@ -595,11 +611,13 @@ User Function PCEMenu()
         Return
     EndIf
 
-    // O arquivo existe no SERVIDOR. Baixar() pergunta onde salvar e traz
-    // para a maquina do usuario. Se ele desistir da janela "Salvar como",
-    // nao ha nada a avisar -- foi escolha dele.
-    If Baixar(cArq)
-        MsgInfo("Relatorio salvo no seu computador.", "Relatorio")
+    // O arquivo existe no SERVIDOR. Baixar() pergunta a pasta e traz para
+    // a maquina do usuario, devolvendo o caminho onde caiu. Vazio = ele
+    // desistiu da janela, e nesse caso nao ha o que avisar.
+    cPasta := Baixar(cArq)
+
+    If !Empty(cPasta)
+        MsgInfo("Relatorio salvo em:" + CRLF + cPasta, "Relatorio")
     EndIf
 
     // Apaga a copia do servidor: ela era so a passagem ate o usuario.
