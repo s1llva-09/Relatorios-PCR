@@ -4,13 +4,8 @@
 
 /*/{Protheus.doc} RelatorioPCE
     Conferencia Consumo vs Estrutura.
-
-    Compara, por OP/sequencia de producao, o consumo ESPERADO (qtd
-    produzida do pai x qtd do componente na estrutura SG1) contra o
-    consumo REAL (movimentos da SD3) e mostra a variacao.
-
-    Variacao negativa = consumiu MENOS que o esperado.
-    Variacao positiva = consumiu MAIS que o esperado.
+    Compara o consumo esperado (qtd produzida x estrutura) com o consumo
+    real (SD3) por OP/sequencia. Variacao negativa = consumiu menos.
 
     @type    User Function
     @author  Pablo Junior (pejunior)
@@ -42,12 +37,7 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
     Default cTipoDe  := ""
     Default cTipoAte := ""
 
-    // Default so age se o parametro vier Nil. O ParamBox manda "" quando o
-    // campo e apagado -- "" nao e Nil, entao o Default nao pegaria e o
-    // filtro sumiria da query. Por isso a checagem explicita de Empty.
-
-    // Filial: em branco assume a filial logada nas duas pontas, ou seja,
-    // o relatorio da propria filial de quem chamou.
+    // Default so pega Nil; o ParamBox manda "" no campo apagado.
     If Empty(cFilDe)
         cFilDe := cFilAnt
     EndIf
@@ -55,7 +45,6 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
         cFilAte := cFilAnt
     EndIf
 
-    // Periodo: em branco assume o mes corrente inteiro.
     If Empty(cDe)
         cDe := DToS(PrimDia(dDataBase))
     EndIf
@@ -63,7 +52,6 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
         cAte := DToS(UltDia(dDataBase))
     EndIf
 
-    // Tipos: em branco abre o intervalo todo (PA ate PE).
     If Empty(cTipoDe)
         cTipoDe := "PA"
     EndIf
@@ -71,11 +59,8 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
         cTipoAte := "PE"
     EndIf
 
-    // A ZPX (celula de costura) so existe como ZPX020 -- empresa 02.
-    // As demais tabelas usam RetSqlName, que traduz pela empresa LOGADA:
-    // na 03 viria SD3030 cruzado com ZPX020, misturando empresas sem
-    // estourar erro nenhum -- o relatorio sairia com numero errado e
-    // ninguem perceberia. Melhor abortar do que entregar dado torto.
+    // A ZPX so existe como ZPX020. Em outra empresa o RetSqlName traria
+    // SD3030 cruzado com ZPX020 -- dado errado, sem erro nenhum.
     If cEmpAnt != "02"
         ConOut("[PCE] empresa " + cEmpAnt + " nao suportada (relatorio e da 02)")
         Return cRet
@@ -86,14 +71,12 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
     cAlias := GetNextAlias()
     DbUseArea(.T., "TOPCONN", TCGenQry(,, cQuery), cAlias, .F., .T.)
 
-    //Sem linhas: Fecha e devolve vazio. Quem chamou decide oq fazer
     If (cAlias) -> (Eof())
         (cAlias) ->(DbCloseArea())
         Return cRet
     EndIf
 
-    //Le tudo para memoria antes de montar o excel: a classe do excel
-    //Trabalha melhor com os dados ja em maos, e liberamos o alias cedo
+    // Le tudo antes de montar o excel, liberando o alias cedo
     While !(cAlias) -> (Eof())
         aAdd(aDados, LeLinha(cAlias))
         (cAlias) -> (DbSkip())
@@ -103,7 +86,6 @@ User function RelatorioPCE(cFilDe as character, cFilAte as character, cDe as cha
 
     cArquivo := MontaNome()
 
-    //So devolve o caminho se o arquivo realmente foi gravado
     If GeraExcel(cArquivo, aDados)
         cRet := cArquivo
     EndIf
@@ -116,34 +98,19 @@ Return cRet
     Isolado da funcao principal porque e a parte que mais muda -- assim
     da para mexer na regra sem tocar no fluxo de leitura/gravacao.
 
-    SOBRE OS APELIDOS DAS COLUNAS:
-    o SQL original usava [Codigo Pai], [Qtd Produzida Pai] etc. Aqui os
-    apelidos vao SEM espaco e SEM acento (CODPAI, QTDPAI...), porque o
-    AdvPL acessa a coluna pelo nome -- (cAlias)->CODPAI -- e nome com
-    espaco/colchete nao e acessivel dessa forma. Os titulos bonitos
-    entram depois, no cabecalho do Excel.
+    Apelidos sem espaco/acento (CODPAI, QTDPAI...) porque o AdvPL acessa
+    a coluna pelo nome: (cAlias)->CODPAI. Os titulos entram no Excel.
 /*/
 Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as character, cAte as character, cTipoDe as character, cTipoAte as character) as character
 
     Local cQuery := "" as character
     Local cIn    := "" as character
 
-    // A ZPX e uma tabela customizada, criada direto no banco: NAO esta
-    // no dicionario (SX2). Por isso RetSqlName("ZPX") devolve vazio e o
-    // JOIN sairia quebrado ("LEFT JOIN  Z (NOLOCK)").
-    //
-    // O nome fica fixo de proposito. Conferido no banco, existe apenas
-    // ZPX020 -- nao ha versao para as outras empresas (010/030/040/050).
-    // Montar o sufixo dinamicamente (a partir do RetSqlName de outra
-    // tabela) daria falsa portabilidade: logado na empresa 03 tentaria
-    // ZPX030, que nao existe, e a query quebraria no SQL.
-    // Este relatorio e da empresa 02 -- vide o SQL original, todo em 020.
-    // Se um dia a ZPX for cadastrada no SX2, trocar por RetSqlName("ZPX").
+    // ZPX nao esta no SX2, entao RetSqlName devolveria vazio. So existe
+    // ZPX020 no banco -- dai o nome fixo.
     Local cTabZPX := "ZPX020" as character
 
-    // --- CTE 1: producoes dos produtos PAI -----------------------------
-    // D3_CF = 'PR0' e apontamento de producao; TIPO PE/PA sao os niveis
-    // de produto acabado/intermediario que interessam.
+    // CTE 1: producoes do PAI. D3_CF = 'PR0' e apontamento de producao.
     cQuery := " WITH OpPai AS ( "
     cQuery += "   SELECT D3_FILIAL, D3_NUMSEQ, D3_EMISSAO, D3_DOC, D3_OP, "
     cQuery += "          D3_TIPO, D3_COD, D3_QUANT AS QTD_PAI, "
@@ -152,20 +119,16 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "    WHERE D3.D_E_L_E_T_ = ' ' "
     cQuery += "      AND D3_ESTORNO <> 'S' "
     cQuery += "      AND D3_CF = 'PR0' "
-    // Tipos: o usuario escolhe um intervalo (De/Ate), mas o SQL sai como
-    // IN com a lista exata. Um BETWEEN 'PA' AND 'PE' arrastaria PB, PC,
-    // PD... -- tipos que existem no Protheus e nao interessam aqui.
+    // Vira IN com a lista exata: BETWEEN arrastaria PB, PC, PD...
     cIn := MontaTipos(cTipoDe, cTipoAte)
     If !Empty(cIn)
         cQuery += "      AND D3_TIPO IN (" + cIn + ") "
     EndIf
 
-    // Filiais: intervalo simples. Igual nas duas pontas = uma filial so.
     If !Empty(cFilDe) .And. !Empty(cFilAte)
         cQuery += "      AND D3_FILIAL BETWEEN '" + cFilDe + "' AND '" + cFilAte + "' "
     EndIf
 
-    //Periodo opcional -- concatenando so quando informado
     If !Empty(cDe)
         cQuery += "      AND D3_EMISSAO >= '" + cDe + "' "
     EndIf
@@ -175,11 +138,8 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
 
     cQuery += " ), "
 
-    // --- CTE 2: estrutura dos componentes ------------------------------
-    // Componentes tipo PI ou PE. Nao confundir com o filtro de tipo do
-    // PAI (parametro da tela, PA/PE): aqui e o COMPONENTE da estrutura.
-    // O JOIN com SB1 tambem descarta os bloqueados para PI
-    // (B1_ZZBLQPI = 'S' -- campo customizado da empresa).
+    // CTE 2: estrutura. Tipo do COMPONENTE (PI/PE) -- nao confundir com
+    // o tipo do PAI, que vem da tela.
     cQuery += " Estrutura AS ( "
     cQuery += "   SELECT G1_COD, G1_COMP, G1_QUANT "
     cQuery += "     FROM " + RetSqlName("SG1") + " G1 (NOLOCK) "
@@ -191,10 +151,8 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "      AND B1_TIPO IN ('PI','PE') "
     cQuery += " ), "
 
-    // --- CTE 3: consumo real -------------------------------------------
-    // Agrupa por sequencia + componente: se houver mais de uma requisicao
-    // para a mesma seq/componente, sem o GROUP BY a linha duplicaria no
-    // join final e a variacao sairia errada.
+    // CTE 3: consumo real. O GROUP BY consolida varias requisicoes do
+    // mesmo componente; sem ele a linha duplicaria no join final.
     cQuery += " ConsumoReal AS ( "
     cQuery += "   SELECT D3_FILIAL, D3_NUMSEQ, D3_COD, SUM(D3_QUANT) AS QTD_REAL "
     cQuery += "     FROM " + RetSqlName("SD3") + " D3 (NOLOCK) "
@@ -203,10 +161,8 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "    GROUP BY D3_FILIAL, D3_NUMSEQ, D3_COD "
     cQuery += " ) "
 
-    // --- Resultado ------------------------------------------------------
-    // LEFT JOIN no consumo real: componente que deveria ser consumido e
-    // NAO foi tem que aparecer (com 0), que e justamente o caso de erro
-    // que o relatorio procura. Com INNER ele sumiria.
+    // LEFT no consumo real: componente que NAO foi consumido tem que
+    // aparecer com 0 -- e justamente o erro que o relatorio procura.
     cQuery += " SELECT P.D3_FILIAL AS FILIAL, "
     cQuery += "        P.D3_NUMSEQ AS NUMSEQ, "
     cQuery += "        ISNULL(Z.ZPX_CELULA, '') AS CELULA, "
@@ -231,16 +187,12 @@ Static Function MontaQuery(cFilDe as character, cFilAte as character, cDe as cha
     cQuery += "          ON Z.ZPX_NUMSEQ = P.D3_NUMSEQ "
     cQuery += "  ORDER BY P.D3_NUMSEQ, E.G1_COMP "
 
-    // ChangeQuery NAO aceita CTE (WITH) -- o framework recusa com erro
-    // explicito. A query ja esta na sintaxe nativa do MSSQL.
-    // cQuery := ChangeQuery(cQuery)
+    // Sem ChangeQuery: ele nao aceita CTE (WITH).
 
 Return cQuery
 
 /*/{Protheus.doc} MontaIn
     Converte "0201,0301" em "'0201','0301'" para uso em IN (...).
-    Sem isso a filial teria que vir ja formatada pelo chamador, o que e
-    fonte de erro e de SQL injection.
 /*/
 Static Function MontaIn(cLista as character) as character
 
@@ -265,12 +217,8 @@ Static Function MontaIn(cLista as character) as character
 Return cRet
 
 /*/{Protheus.doc} OpcCombo
-    Devolve o TEXTO escolhido num campo combo do ParamBox.
-
-    Existe porque o retorno do combo nao e igual em toda versao de
-    AppServer: umas devolvem a string selecionada, outras o indice
-    numerico da opcao. Tratar os dois casos aqui evita que o relatorio
-    quebre -- ou pior, filtre por um tipo errado -- ao mudar de ambiente.
+    Texto escolhido num combo do ParamBox. O retorno varia por versao de
+    AppServer: umas devolvem a string, outras o indice.
 /*/
 Static Function OpcCombo(xVal, aOpcoes as array) as character
 
@@ -288,22 +236,13 @@ Return cRet
 
 
 /*/{Protheus.doc} MontaTipos
-    Recebe o intervalo escolhido (ex: "PA" ate "PE") e devolve a lista
-    formatada para o IN -- ex: "'PA','PE'".
-
-    Trabalha sobre uma lista fechada dos tipos validos em vez de usar
-    BETWEEN no SQL. Motivo: o Protheus tem outros tipos (PB, PC, PD...)
-    que cairiam dentro do intervalo alfabetico sem terem sido pedidos.
-    Aqui so entra o que esta em TIPOS_VALIDOS.
-
-    Intervalo invertido (De maior que Ate) devolve vazio -- nenhum tipo
-    casa, e a query simplesmente nao filtra por tipo.
+    Intervalo escolhido (ex: "PA" ate "PE") vira lista para o IN.
+    Lista fechada em vez de BETWEEN: o Protheus tem outros tipos (PB,
+    PC...) que cairiam no intervalo alfabetico sem terem sido pedidos.
 /*/
 Static Function MontaTipos(cDe as character, cAte as character) as character
 
-    // Tipos do produto PAI. O PI saiu da lista: no SQL de origem a
-    // producao lida e so PE/PA. O PI segue existindo do outro lado, como
-    // COMPONENTE, na CTE Estrutura -- sao coisas diferentes.
+    // Tipos do PAI. O PI so existe do outro lado, como componente.
     Local aTipos := {"PA", "PE"} as array
     Local cLista := "" as character
     Local nI     := 0 as numeric
@@ -320,7 +259,6 @@ Static Function MontaTipos(cDe as character, cAte as character) as character
         EndIf
     Next nI
 
-    // Reaproveita o MontaIn para pos as aspas
 Return MontaIn(cLista)
 
 
@@ -332,11 +270,8 @@ Return dData - Day(dData) + 1
 
 
 /*/{Protheus.doc} UltDia
-    Ultimo dia do mes da data informada.
-
-    Feito na aritmetica de datas para nao depender de LastDate(): soma 32
-    dias ao dia 1 (cai sempre no mes seguinte, ja que nenhum mes tem 32
-    dias) e volta ao ultimo dia do mes anterior subtraindo o proprio dia.
+    Ultimo dia do mes. Soma 32 dias ao dia 1 (cai sempre no mes seguinte)
+    e volta subtraindo o proprio dia.
 /*/
 Static Function UltDia(dData as date) as date
 
@@ -346,29 +281,25 @@ Return dProx - Day(dProx)
 
 
 /*/{Protheus.doc} LeLinha
-    Le a linha corrente da query num array, na MESMA ordem das colunas
-    declaradas em GeraExcel. Se mudar uma, tem que mudar a outra -- e o
-    unico acoplamento entre as duas funcoes.
+    Le a linha corrente na MESMA ordem das colunas de GeraExcel.
+    Mexeu numa, mexe na outra.
 /*/
 Static Function LeLinha(cAlias as character) as array
 
     Local aLinha := {} as array
 
-    // AllTrim nos textos (Protheus preenche com espacos a direita)
     AAdd(aLinha, AllTrim((cAlias)->FILIAL))
     AAdd(aLinha, AllTrim((cAlias)->NUMSEQ))
     AAdd(aLinha, AllTrim((cAlias)->CELULA))
     AAdd(aLinha, AllTrim((cAlias)->ARMAZEM))
     AAdd(aLinha, AllTrim((cAlias)->OPPAI))
 
-    // Data vem como texto AAAAMMDD; converte para dd/mm/aaaa
     AAdd(aLinha, DataBr((cAlias)->EMISSAO))
 
     AAdd(aLinha, AllTrim((cAlias)->TIPOPAI))
     AAdd(aLinha, AllTrim((cAlias)->CODPAI))
     AAdd(aLinha, AllTrim((cAlias)->LOTEPAI))
 
-    // Numericos seguem numericos, para o Excel somar/ordenar
     AAdd(aLinha, (cAlias)->QTDPAI)
     AAdd(aLinha, AllTrim((cAlias)->CODCOMP))
     AAdd(aLinha, (cAlias)->QTDESTR)
@@ -396,30 +327,14 @@ Return cRet
 
 
 /*/{Protheus.doc} Baixar
-    Copia o arquivo do servidor para a maquina de quem rodou o relatorio.
+    Copia o arquivo do servidor para a maquina do usuario (CpyS2T).
 
-    POR QUE ISSO E NECESSARIO
-    -------------------------
-    O AppServer roda no servidor, entao o FWMsExcelXlsx grava LA. Antes o
-    arquivo ficava em \cachenosso\ e o usuario tinha que ir buscar por
-    rede -- o que so funcionava para quem tinha acesso aquela pasta.
-
-    CpyS2T = "Copy Server To Terminal": leva o arquivo do servidor para o
-    cliente. E o par do CpyT2S, que faz o contrario.
-
-    DUAS REGRAS DO CpyS2T QUE PEGAM
-    -------------------------------
-    1. A ORIGEM e relativa ao rootpath e nao aceita letra de drive
-       ("\cachenosso\arq.xlsx", nunca "C:\...\arq.xlsx").
-    2. O DESTINO e a PASTA, nao o arquivo. O nome vem da origem -- e por
-       isso que o MontaNome ja batiza o arquivo de "PCE_...".
-
-    Por causa da regra 2, o que o usuario digitar como nome na janela e
-    ignorado; so a pasta escolhida vale. A mensagem final mostra o
-    caminho real onde o arquivo caiu, para nao gerar duvida.
+    Duas regras do CpyS2T: a origem e relativa ao rootpath e nao aceita
+    letra de drive; o destino e a PASTA, nao o arquivo -- o nome vem da
+    origem. Por isso o nome digitado na janela e ignorado.
 
     @param cServidor, Caracter, arquivo gerado no servidor
-    @return character, pasta onde o arquivo foi salvo ("" se nao salvou)
+    @return character, pasta onde foi salvo ("" se nao salvou)
 /*/
 Static Function Baixar(cServidor as character) as character
 
@@ -430,7 +345,6 @@ Static Function Baixar(cServidor as character) as character
     cEscolha := cGetFile("Planilha Excel (*.xlsx) |*.xlsx", ;
                          "Escolha a pasta de destino", , , .T., , .T.)
 
-    // Usuario fechou a janela sem escolher: nao e erro, so desistencia.
     If Empty(cEscolha)
         Return ""
     EndIf
@@ -452,21 +366,9 @@ Return cDirCli
 
 
 /*/{Protheus.doc} MontaNome
-    Caminho do arquivo de saida, NO SERVIDOR.
-
-    O relatorio nasce sempre no servidor -- e la que o AppServer roda.
-    Depois o PCEMenu copia para a maquina de quem pediu (ver Baixar()).
-
-    O caminho e RELATIVO ao rootpath, comecando em "\". Nao pode ser
-    GetTempPath() nem nada com letra de drive: o CpyS2T recusa a origem
-    com "must not contain the destination drive letter".
-
-    CriaTrab(Nil, .F.) devolve um nome UNICO sem criar tabela nenhuma
-    (Nil na estrutura + .F. e o que evita a criacao), garantindo que duas
-    execucoes simultaneas nao gravem por cima uma da outra. O prefixo
-    "PCE_" e so para o usuario reconhecer o arquivo no Downloads: e esse
-    mesmo nome que chega na maquina dele, porque o CpyS2T mantem o nome
-    da origem.
+    Caminho do arquivo no SERVIDOR, relativo ao rootpath (o CpyS2T nao
+    aceita letra de drive na origem).
+    CriaTrab(Nil, .F.) da um nome unico sem criar tabela nenhuma.
 /*/
 Static Function MontaNome() as character
 
@@ -479,11 +381,9 @@ Return cDir + "PCE_" + CriaTrab(Nil, .F.) + ".xlsx"
 
 
 /*/{Protheus.doc} GeraExcel
-    Grava a planilha.
-    FWMsExcelXlsx grava .xlsx nativo. A irma FWMsExcel tem os MESMOS
-    metodos mas gera .xml (SpreadsheetML) -- para trocar, muda o New()
-    aqui e a extensao em MontaNome(). Os dois tem que andar juntos:
-    extensao .xlsx com FWMsExcel produz arquivo que o Excel recusa.
+    Grava a planilha. FWMsExcelXlsx = .xlsx nativo; a irma FWMsExcel tem
+    os mesmos metodos mas gera .xml -- trocar uma exige trocar a extensao
+    em MontaNome() junto.
 /*/
 Static Function GeraExcel(cArquivo as character, aDados as array) as logical
 
@@ -493,10 +393,7 @@ Static Function GeraExcel(cArquivo as character, aDados as array) as logical
     Local aCols   := {} as array
     Local nI      := 0 as numeric
 
-    // {titulo, alinhamento, formato}
-    //   alinhamento: 1=esquerda 2=centro 3=direita
-    //   formato    : 1=geral/texto 2=numero
-    // Numerico a direita e como numero, para o Excel somar e ordenar.
+    // {titulo, alinhamento (1=esq 2=centro 3=dir), formato (1=texto 2=num)}
     aCols := { ;
         {"Filial",            1, 1}, ;
         {"NumSeq Pai",        1, 1}, ;
@@ -519,7 +416,6 @@ Static Function GeraExcel(cArquivo as character, aDados as array) as logical
     oExcel:AddTable(cAba, cTabela)
 
     For nI := 1 To Len(aCols)
-        // AddColumn(aba, tabela, titulo, alinhamento, formato, totalizar)
         oExcel:AddColumn(cAba, cTabela, aCols[nI][1], aCols[nI][2], aCols[nI][3], .F.)
     Next nI
 
@@ -528,7 +424,7 @@ Static Function GeraExcel(cArquivo as character, aDados as array) as logical
     Next nI
 
     oExcel:Activate()
-    // Apesar do nome, e o metodo que grava tambem no formato xlsx
+    // Apesar do nome, grava xlsx tambem
     oExcel:GetXMLFile(cArquivo)
 
 Return File(cArquivo)             // confirma que o arquivo saiu
@@ -554,52 +450,37 @@ User Function PCEMenu()
     Local cPasta := "" as character
     Local aTipos := {"PA", "PE"} as array
 
-    // Barra aqui tambem, antes de pedir os parametros: sem isso o usuario
-    // preencheria a tela toda para so no fim receber "nenhum registro",
-    // mensagem que esconderia o motivo real (empresa errada).
+    // Barra antes de pedir os parametros, senao o usuario so descobriria
+    // no fim, com a mensagem generica de "nenhum registro".
     If cEmpAnt != "02"
         MsgAlert("Este relatorio e da empresa 02. Voce esta logado na " + cEmpAnt + ".", "Relatorio")
         Return
     EndIf
 
-    // ParamBox monta a tela de parametros. Cada linha:
     // {tipo, titulo, valor inicial, picture, valid, F3, when, tamanho, obrigatorio}
-    // Filial: ja vem com a filial logada nas duas pontas -- o caso mais
-    // comum e o usuario querer a propria filial. Da para alterar.
     AAdd(aPergs, {1, "Filial de",  cFilAnt, "@!", "", "", "", 60, .F.})
     AAdd(aPergs, {1, "Filial ate", cFilAnt, "@!", "", "", "", 60, .F.})
 
-    // Data: mes corrente inteiro. Valor inicial do tipo D faz o ParamBox
-    // desenhar campo de data com calendario (com Space(8) viria texto).
+    // Valor inicial tipo D faz o ParamBox desenhar campo com calendario.
     AAdd(aPergs, {1, "Emissao de",  PrimDia(dDataBase), "", "", "", "", 50, .F.})
     AAdd(aPergs, {1, "Emissao ate", UltDia(dDataBase),  "", "", "", "", 50, .F.})
 
-    // Tipo: combo (tipo 2) em vez de texto livre, para so aparecerem os
-    // tipos que o relatorio trata. O 3o elemento e a opcao inicial:
-    // 1 = PA no De, 2 = PE no Ate, abrindo o intervalo todo por padrao.
-    // Manter esses indices alinhados com aTipos -- apontar para uma
-    // posicao que nao existe mais deixa o combo em branco.
+    // Combo (tipo 2). O 3o elemento e o indice da opcao inicial e tem
+    // que existir em aTipos, senao o campo abre em branco.
     AAdd(aPergs, {2, "Tipo de",  1, aTipos, 60, "", .F.})
     AAdd(aPergs, {2, "Tipo ate", 2, aTipos, 60, "", .F.})
 
 
-    // Os 3 ultimos argumentos (cLoad, lCanSave, lUserSave) desligam o
-    // cache de parametros. O ParamBox grava a ultima execucao num .MEM e
-    // restaura POR POSICAO -- como a estrutura da tela mudou (o campo 2
-    // era data e virou filial), ele devolvia a data velha no campo de
-    // filial. Sem salvar, a tela sempre abre nos defaults.
+    // Os 3 ultimos argumentos desligam o cache: o ParamBox restaura a
+    // ultima execucao POR POSICAO e erra quando a tela muda de estrutura.
     If !ParamBox(aPergs, "Conferencia Consumo vs Estrutura", @aRet, , , , , , , "PCEPARAM", .F., .F.)
         Return   // usuario cancelou
     EndIf
 
-    // O campo volta como data (tipo D). O banco guarda D3_EMISSAO como
-    // AAAAMMDD, entao DToS() faz a ponte. O Empty() trata o campo em
-    // branco: data vazia nao vira string vazia sozinha.
+    // O banco guarda D3_EMISSAO como AAAAMMDD; DToS faz a ponte.
     cDe  := If(Empty(aRet[3]), "", DToS(aRet[3]))
     cAte := If(Empty(aRet[4]), "", DToS(aRet[4]))
 
-    // Processa exibe a ampulheta enquanto a query roda -- sem isso a
-    // tela congela e parece travada em consultas longas.
     Processa({|| cArq := U_RelatorioPCE(AllTrim(aRet[1]), AllTrim(aRet[2]), ;
                                         cDe, cAte, ;
                                         OpcCombo(aRet[5], aTipos), ;
@@ -611,18 +492,14 @@ User Function PCEMenu()
         Return
     EndIf
 
-    // O arquivo existe no SERVIDOR. Baixar() pergunta a pasta e traz para
-    // a maquina do usuario, devolvendo o caminho onde caiu. Vazio = ele
-    // desistiu da janela, e nesse caso nao ha o que avisar.
+    // Vazio = o usuario desistiu da janela; nao ha o que avisar.
     cPasta := Baixar(cArq)
 
     If !Empty(cPasta)
         MsgInfo("Relatorio salvo em:" + CRLF + cPasta, "Relatorio")
     EndIf
 
-    // Apaga a copia do servidor: ela era so a passagem ate o usuario.
-    // Fica fora do If de proposito -- mesmo que ele cancele o download,
-    // o temporario nao tem por que continuar la.
+    // Apaga a copia do servidor mesmo se o usuario cancelou o download.
     FErase(cArq)
 
 Return
@@ -631,15 +508,9 @@ Return
 /*/{Protheus.doc} ZTSTPCE
 Roda o relatorio sem interface, para depurar pelo VSCode.
 
-Existe porque a U_PCEMenu abre ParamBox/MsgInfo: no debug isso prende a
-sessao numa tela e nao da para ver o resultado. Aqui o retorno sai no
-console (ConOut), que aparece na aba de saida do VSCode.
-
-O RpcSetEnv monta o ambiente na mao -- fora do menu nao ha login, entao
-sem ele nao existe cEmpAnt e as tabelas nao abrem. Empresa "02" porque
-e a do relatorio (vide comentario da ZPX em MontaQuery).
-
-NAO usar em producao: e codigo de teste.
+A U_PCEMenu abre ParamBox/MsgInfo, o que prende o debug numa tela. Aqui
+o resultado sai no ConOut. O RpcSetEnv monta o ambiente na mao porque
+fora do menu nao ha login. Codigo de teste, nao usar em producao.
 @author Pedro Junior
 @since 21/08/2026
 /*/
@@ -649,9 +520,7 @@ User Function ZTSTPCE()
 
     RpcSetEnv("02", "0201")
 
-    // Em branco nos seis: cai nos defaults (filial logada, mes corrente,
-    // tipos PA ate PE). Trocar aqui para testar outros filtros -- ex:
-    // U_RelatorioPCE("0201", "0301", "20260701", "20260731", "PA", "PE")
+    // Em branco = defaults. Ex: ("0201","0301","20260701","20260731","PA","PE")
     cArq := U_RelatorioPCE("", "", "", "", "", "")
 
     If Empty(cArq)
